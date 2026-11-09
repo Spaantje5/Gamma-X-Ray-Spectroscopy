@@ -20,13 +20,51 @@ for k in ("keymap.back", "keymap.forward"):
 
 #INTERACTIVE FIT
 
+def load_results(path=CSV_PATH):
+    if not Path(path).exists():
+        return None
+    results = {}
+    with open(path, newline="") as fh:
+        for row in csv.DictReader(fh):
+            d = results.setdefault(row["folder"], {})
+            r = d.setdefault(row["measurement"],
+                            {"peak1": None, "peak2": None, "lines": []})
+            lo, hi = float(row["line_lo"]), float(row["line_hi"])
+            r["lines"].append((lo, hi))
+            if row["mu"]: #empty string = no successful fit
+                r[f"peak{row['peak']}"] = {
+                    "mu": float(row["mu"]),
+                    "mu_err": float(row["mu_err"]),
+                    "fwhm": float(row["fwhm"]),
+                    "fwhm_err": float(row["fwhm_err"]),
+                    "popt": np.array([float(row[k]) for k in ("A", "mu", "sigma", "c")]),
+                    "range": (lo, hi)
+                }        
+    return results
+
+def save_results(results, path=CSV_PATH):
+    with open(path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=FIELDS)
+        w.writeheader()
+        for name, d in results.items():
+            for key, r in d.items():
+                for i, (lo, hi) in enumerate(r["lines"]):
+                    row = {"folder": name, "measurement": key, "peak": i + 1,
+                        "line_lo": lo, "line_hi": hi}
+                    f = r[f"peak{i + 1}"]
+                    if f is not None: #failed fits keep just the lines
+                        A, mu, sigma, c = f["popt"]
+                        row.update(mu=mu, mu_err=f["mu_err"], fwhm=f["fwhm"],
+                                fwhm_err=f["fwhm_err"], A=A, sigma=sigma, c=c)
+                    w.writerow(row)
+
 def interactive_fit_all(data, results=None, measurementtype=None, only=None):
     plt.close("all")
     if measurementtype is not None:
         data = {measurementtype: data[measurementtype]}
     items = only or [(n, k) for n, d in data.items() for k in d]
     if results is None:
-        results = {n: {} for n in data}
+        results = load_results() or {}
     S = {} #state for the current measurement
     drag = [None] #line currently being dragged
     updating = [False]
@@ -130,6 +168,7 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
                 "peak1": S["fits"][0], "peak2": S["fits"][1],
                 "lines": [tuple(pos(p)) for p in S["lines"][:1 + S["blue"]]],
             }
+            save_results(results)
             if S["i"] + 1 < len(items):
                 load(S["i"] + 1)
             else:
@@ -201,41 +240,3 @@ def show_all_fits(data, results, ncols=3):
         ax.axis("off")
     fig.tight_layout()
     plt.show()
-
-def save_results(results, path=CSV_PATH):
-    with open(path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=FIELDS)
-        w.writeheader()
-        for name, d in results.items():
-            for key, r in d.items():
-                for i, (lo, hi) in enumerate(r["lines"]):
-                    row = {"folder": name, "measurement": key, "peak": i + 1,
-                           "line_lo": lo, "line_hi": hi}
-                    f = r[f"peak{i + 1}"]
-                    if f is not None: #failed fits keep just the lines
-                        A, mu, sigma, c = f["popt"]
-                        row.update(mu=mu, mu_err=f["mu_err"], fwhm=f["fwhm"],
-                                   fwhm_err=f["fwhm_err"], A=A, sigma=sigma, c=c)
-                    w.writerow(row)
-
-def load_results(path=CSV_PATH):
-    if not Path(path).exists():
-        return None
-    results = {}
-    with open(path, newline="") as fh:
-        for row in csv.DictReader(fh):
-            d = results.setdefault(row["folder"], {})
-            r = d.setdefault(row["measurement"],
-                            {"peak1": None, "peak2": None, "lines": []})
-            lo, hi = float(row["line_lo"]), float(row["line_hi"])
-            r["lines"].append((lo, hi))
-            if row["mu"]: #empty string = no successful fit
-                r[f"peak{row['peak']}"] = {
-                    "mu": float(row["mu"]),
-                    "mu_err": float(row["mu_err"]),
-                    "fwhm": float(row["fwhm"]),
-                    "fwhm_err": float(row["fwhm_err"]),
-                    "popt": np.array([float(row[k]) for k in ("A", "mu", "sigma", "c")]),
-                    "range": (lo, hi)
-                }        
-    return results
