@@ -2,10 +2,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
-def plot(data, measurement_type, scintillator):
+def plot(data, measurement_type, material):
     plt.figure()
-    plt.plot(data[measurement_type][scintillator]["channels"], data[measurement_type][scintillator]["spectrum"])
-    plt.title(f"{measurement_type} / {scintillator}")
+    plt.plot(data[measurement_type][material]["channels"], data[measurement_type][material]["spectrum"])
+    plt.title(f"{measurement_type} / {material}")
     plt.xlabel("Channel"); plt.ylabel("Counts")
     plt.show()
 

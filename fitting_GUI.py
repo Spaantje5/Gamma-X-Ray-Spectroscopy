@@ -1,27 +1,51 @@
+#IMPORTS
+
+import csv
 import matplotlib.pyplot as plt
+from matplotlib.widgets import TextBox
+from pathlib import Path
 from fitting_functions import *
 
-#Left/right arrows are matplotlib's default back/forward shortcuts, so free them up
+#CSV FIELDS
+
+FIELDS = ["folder", "measurement", "peak", "line_lo", "line_hi",
+          "mu", "mu_err", "fwhm", "fwhm_err", "A", "sigma", "c"]
+CSV_PATH = "fit_results.csv"
+
+#FREE UP LEFT AND RIGHT ARROWS
+
 for k in ("keymap.back", "keymap.forward"):
     plt.rcParams[k] = [x for x in plt.rcParams[k] if x not in ("left", "right")]
 
-def interactive_fit_all(data, measurementtype):
+#INTERACTIVE FIT
+
+def interactive_fit_all(data, results=None, measurementtype=None, only=None):
+    if measurementtype is not None:
+        data = {measurementtype: data[measurementtype]}
     items = [(n, k) for n, d in data.items() for k in d]
     if results is None:
         results = {n: {} for n in data}
     S = {} #state for the current measurement
     drag = [None] #line currently being dragged
+    updating = [False]
     fig, ax = plt.subplots(figsize=(9, 5))
+    fig.subplots_adjust(bottom=0.2)
 
     def spectrum():
         name, key = items[S["i"]]
         return data[name][key]["channels"], data[name][key]["spectrum"]
 
-    def pos(pair):
+    def pos(pair): #position of active pair
         return sorted(l.get_xdata()[0] for l in pair)
 
+    def sync_boxes(): #active pair's x coordinates
+        lo, hi = pos(S["lines"][S["active"]])
+        updating[0] = True
+        lo_box.set_val(f"{lo:.1f}")
+        hi_box.set_val(f"{hi:.1f}")
+        updating[0] = False
+
     def refresh(msg=""):
-        """Update visibility, dimming and title (which shows the line positions)."""
         for idx in (0, 1):
             visible = idx == 0 or S["blue"]
             for l in S["lines"][idx] + [S["fitlines"][idx]]:
@@ -34,7 +58,19 @@ def interactive_fit_all(data, measurementtype):
         name, key = items[S["i"]]
         ax.set_title(f"{name}/{key} [{S['i']+1}/{len(items)}]  {text}\n{msg}\n"
                      "→ blue pair, ← red pair, Enter = done", fontsize=8)
+        sync_boxes()
         fig.canvas.draw_idle()
+
+    def draw_fit(idx):
+        """Fit pair idx between its lines, draw the curve, return a message."""
+        lo, hi = pos(S["lines"][idx])
+        fit = S["fits"][idx] = fit_peak(*spectrum(), lo, hi)
+        if fit is None:
+            S["fitlines"][idx].set_data([], [])
+            return "Fit failed / too few points"
+        xs = np.linspace(lo, hi, 300)
+        S["fitlines"][idx].set_data(xs, gauss(xs, *fit["popt"]))
+        return f"mu = {fit['mu']:.2f}, FWHM = {fit['fwhm']:.2f}"
 
     def load(i):
         S.update(i=i, active=0, blue=False, fits=[None, None], lines=[], fitlines=[])
@@ -49,14 +85,13 @@ def interactive_fit_all(data, measurementtype):
             if had:
                 lo, hi = old["lines"][idx] #put the lines back where they were
             S["lines"].append([ax.axvline(lo, color=c), ax.axvline(hi, color=c)])
-            fl, = ax.plot([], [], "k", lw=1.5)
-            S["fitlines"].append(fl)
-            if had and old[f"peak{idx + 1}"] is not None:
-                S["fits"][idx] = old[f"peak{idx + 1}"]
-                xs = np.linspace(lo, hi, 300)
-                fl.set_data(xs, gauss(xs, *S["fits"][idx]["popt"]))
+            S["fitlines"].append(ax.plot([], [], "k", lw=1.5)[0])
+            if had:
+                draw_fit(idx)
         S["blue"] = old is not None and len(old["lines"]) > 1
         refresh()
+
+    #MOUSE INPUTS
 
     def on_press(e):
         if e.inaxes is ax:
@@ -85,6 +120,8 @@ def interactive_fit_all(data, measurementtype):
             S["fitlines"][a].set_data(xs, gauss(xs, *fit["popt"]))
             refresh(f"mu = {fit['mu']:.2f}, FWHM = {fit['fwhm']:.2f}")
 
+    #KEYBOARD INPUTS
+
     def on_key(e):
         if e.key in ("left", "right"):
             S["active"] = int(e.key == "right")
@@ -104,10 +141,30 @@ def interactive_fit_all(data, measurementtype):
                 fig.canvas.draw_idle()
                 show_all_fits(data, results)
 
+    #TEXT BOXES
+
+    def on_submit(_text):
+        if updating[0]:
+            return #the code changed the box, not you
+        try:
+            a, b = sorted((float(lo_box.text), float(hi_box.text)))
+        except ValueError:
+            sync_boxes() #not a number: restore the old values
+            return
+        l0, l1 = S["lines"][S["active"]]
+        l0.set_xdata([a, a])
+        l1.set_xdata([b, b])
+        refresh(draw_fit(S["active"]))
+
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
     fig.canvas.mpl_connect("button_release_event", on_release)
     cid = fig.canvas.mpl_connect("key_press_event", on_key)
+
+    lo_box = TextBox(fig.add_axes([0.2, 0.05, 0.15, 0.06]), "Low ")
+    hi_box = TextBox(fig.add_axes([0.55, 0.05, 0.15, 0.06]), "High ")
+    lo_box.on_submit(on_submit)
+    hi_box.on_submit(on_submit)
 
     load(0)
     plt.show()
@@ -148,12 +205,7 @@ def show_all_fits(data, results, ncols=3):
     fig.tight_layout()
     plt.show()
 
-import csv
-
-FIELDS = ["folder", "measurement", "peak", "line_lo", "line_hi",
-          "mu", "mu_err", "fwhm", "fwhm_err", "A", "sigma", "c"]
-
-def save_results(results, path="fit_results.csv"):
+def save_results(results, path=CSV_PATH):
     with open(path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=FIELDS)
         w.writeheader()
@@ -169,20 +221,24 @@ def save_results(results, path="fit_results.csv"):
                                    fwhm_err=f["fwhm_err"], A=A, sigma=sigma, c=c)
                     w.writerow(row)
 
-def load_results(path="fit_results.csv"):
+def load_results(path=CSV_PATH):
+    if not Path(path).exists():
+        return None
     results = {}
     with open(path, newline="") as fh:
         for row in csv.DictReader(fh):
             d = results.setdefault(row["folder"], {})
             r = d.setdefault(row["measurement"],
-                             {"peak1": None, "peak2": None, "lines": []})
+                            {"peak1": None, "peak2": None, "lines": []})
             lo, hi = float(row["line_lo"]), float(row["line_hi"])
             r["lines"].append((lo, hi))
             if row["mu"]: #empty string = no successful fit
                 r[f"peak{row['peak']}"] = {
-                    "mu": float(row["mu"]), "mu_err": float(row["mu_err"]),
-                    "fwhm": float(row["fwhm"]), "fwhm_err": float(row["fwhm_err"]),
+                    "mu": float(row["mu"]),
+                    "mu_err": float(row["mu_err"]),
+                    "fwhm": float(row["fwhm"]),
+                    "fwhm_err": float(row["fwhm_err"]),
                     "popt": np.array([float(row[k]) for k in ("A", "mu", "sigma", "c")]),
-                    "range": (lo, hi),
-                }
+                    "range": (lo, hi)
+                }        
     return results
