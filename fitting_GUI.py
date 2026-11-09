@@ -1,6 +1,7 @@
 #IMPORTS
 
 import csv
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import TextBox
 from pathlib import Path
@@ -20,9 +21,10 @@ for k in ("keymap.back", "keymap.forward"):
 #INTERACTIVE FIT
 
 def interactive_fit_all(data, results=None, measurementtype=None, only=None):
+    plt.close("all")
     if measurementtype is not None:
         data = {measurementtype: data[measurementtype]}
-    items = [(n, k) for n, d in data.items() for k in d]
+    items = only or [(n, k) for n, d in data.items() for k in d]
     if results is None:
         results = {n: {} for n in data}
     S = {} #state for the current measurement
@@ -33,7 +35,7 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
 
     def spectrum():
         name, key = items[S["i"]]
-        return data[name][key]["channels"], data[name][key]["spectrum"]
+        return data[name][key]["energy"], data[name][key]["spectrum"]
 
     def pos(pair): #position of active pair
         return sorted(l.get_xdata()[0] for l in pair)
@@ -51,7 +53,7 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
             for l in S["lines"][idx] + [S["fitlines"][idx]]:
                 l.set_visible(visible)
                 l.set_alpha(1.0 if idx == S["active"] else 0.35)
-        text = "   ".join(f"{c}: {lo:.0f}–{hi:.0f}"
+        text = "   ".join(f"{c}: {lo:.1f}–{hi:.1f}"
                           for idx, c in enumerate(("red", "blue"))
                           if idx == 0 or S["blue"]
                           for lo, hi in [pos(S["lines"][idx])])
@@ -74,16 +76,18 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
 
     def load(i):
         S.update(i=i, active=0, blue=False, fits=[None, None], lines=[], fitlines=[])
-        ch, sp = spectrum()
+        e, sp = spectrum()
         ax.clear()
-        ax.plot(ch, sp, lw=0.8)
+        ax.plot(e, sp, lw=0.8)
+        ax.set_xlabel("Energy (keV)")
+        ax.set_ylabel("Counts")
         name, key = items[i]
-        old = results.get(name, {}).get(key) #earlier result, or None
+        old = results.get(name, {}).get(key)       # earlier result, or None
         for idx, (c, (a, b)) in enumerate(zip("rb", [(40, 50), (60, 70)])):
-            lo, hi = np.percentile(ch, [a, b])
+            lo, hi = np.percentile(e, [a, b])
             had = old is not None and idx < len(old["lines"])
             if had:
-                lo, hi = old["lines"][idx] #put the lines back where they were
+                lo, hi = old["lines"][idx]         # put the lines back where they were
             S["lines"].append([ax.axvline(lo, color=c), ax.axvline(hi, color=c)])
             S["fitlines"].append(ax.plot([], [], "k", lw=1.5)[0])
             if had:
@@ -103,33 +107,26 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
     def on_motion(e):
         if drag[0] is not None and e.xdata is not None:
             drag[0].set_xdata([e.xdata, e.xdata])
-            refresh()
+            fig.canvas.draw_idle()
 
     def on_release(e):
         if drag[0] is None:
             return
         drag[0] = None
-        a = S["active"]
-        lo, hi = pos(S["lines"][a])
-        fit = S["fits"][a] = fit_peak(*spectrum(), lo, hi)
-        if fit is None:
-            S["fitlines"][a].set_data([], [])
-            refresh("Fit failed / too few points")
-        else:
-            xs = np.linspace(lo, hi, 300)
-            S["fitlines"][a].set_data(xs, gauss(xs, *fit["popt"]))
-            refresh(f"mu = {fit['mu']:.2f}, FWHM = {fit['fwhm']:.2f}")
+        refresh(draw_fit(S["active"]))
 
     #KEYBOARD INPUTS
 
     def on_key(e):
+        if lo_box.capturekeystrokes or hi_box.capturekeystrokes:
+            return
         if e.key in ("left", "right"):
             S["active"] = int(e.key == "right")
             S["blue"] = S["blue"] or S["active"] == 1
             refresh()
         elif e.key == "enter":
             name, key = items[S["i"]]
-            results[name][key] = {
+            results.setdefault(name, {})[key] = {
                 "peak1": S["fits"][0], "peak2": S["fits"][1],
                 "lines": [tuple(pos(p)) for p in S["lines"][:1 + S["blue"]]],
             }
@@ -171,7 +168,7 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
     return fig, results
 
 def show_all_fits(data, results, ncols=3):
-    items = [(n, k) for n, d in results.items() for k in d]
+    items = [(n, k) for n, d in results.items() for k in d if k in data.get(n, {})]
     if not items:
         print("No results to show")
         return
@@ -179,8 +176,8 @@ def show_all_fits(data, results, ncols=3):
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 3.5 * nrows), squeeze=False)
 
     for ax, (name, key) in zip(axes.flat, items):
-        ch, sp = data[name][key]["channels"], data[name][key]["spectrum"]
-        ax.plot(ch, sp, lw=0.8, color="gray")
+        e, sp = data[name][key]["energy"], data[name][key]["spectrum"]
+        ax.plot(e, sp, lw=0.8, color="gray")
         fits = [(results[name][key][p], c) for p, c in (("peak1", "r"), ("peak2", "b"))]
         fits = [(f, c) for f, c in fits if f is not None]
 
@@ -193,11 +190,11 @@ def show_all_fits(data, results, ncols=3):
             hi = max(f["range"][1] for f, _ in fits)
             pad = 0.5 * (hi - lo)
             ax.set_xlim(lo - pad, hi + pad)
-            ax.set_ylim(0, sp[(ch >= lo - pad) & (ch <= hi + pad)].max() * 1.1)
+            ax.set_ylim(0, sp[(e >= lo - pad) & (e <= hi + pad)].max() * 1.1)
 
         labels = [f"mu={f['mu']:.2f}, FWHM={f['fwhm']:.2f}" for f, _ in fits] or ["no fit"]
         ax.set_title(f"{name}/{key}\n" + "\n".join(labels), fontsize=8)
-        ax.set_xlabel("Channel")
+        ax.set_xlabel("Energy (keV)")
         ax.set_ylabel("Counts")
 
     for ax in axes.flat[len(items):]:
