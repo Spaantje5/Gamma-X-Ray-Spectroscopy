@@ -102,8 +102,19 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
         fig.canvas.draw_idle()
 
     def draw_fit(idx):
-        """Fit pair idx between its lines, draw the curve, return a message."""
-        lo, hi = pos(S["lines"][idx])
+        if S["blue"]:                                     # joint fit of both peaks
+            r1, r2 = pos(S["lines"][0]), pos(S["lines"][1])
+            f1, f2, p = fit_two(*spectrum(), r1, r2)
+            S["fits"] = [f1, f2]
+            for fl in S["fitlines"]:
+                fl.set_data([], [])
+            if f1 is None:
+                return "Joint fit failed"
+            xs = np.linspace(min(r1[0], r2[0]), max(r1[1], r2[1]), 400)
+            S["fitlines"][0].set_data(xs, two_peaks(xs, *p))   # total curve
+            return (f"mu1 = {f1['mu']:.2f}, FWHM1 = {f1['fwhm']:.2f} | "
+                    f"mu2 = {f2['mu']:.2f}, FWHM2 = {f2['fwhm']:.2f}")
+        lo, hi = pos(S["lines"][idx])                     # one peak: as before
         fit = S["fits"][idx] = fit_peak(*spectrum(), lo, hi)
         if fit is None:
             S["fitlines"][idx].set_data([], [])
@@ -131,7 +142,10 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
             if had:
                 draw_fit(idx)
         S["blue"] = old is not None and len(old["lines"]) > 1
+        if S["blue"]:
+            draw_fit(0)
         refresh()
+        fig.canvas.draw()
 
     #MOUSE INPUTS
 
@@ -156,13 +170,14 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
     #KEYBOARD INPUTS
 
     def on_key(e):
-        if lo_box.capturekeystrokes or hi_box.capturekeystrokes:
-            return
         if e.key in ("left", "right"):
             S["active"] = int(e.key == "right")
+            first_blue = S["active"] == 1 and not S["blue"]
             S["blue"] = S["blue"] or S["active"] == 1
+            if first_blue:
+                draw_fit(0)
             refresh()
-        elif e.key == "enter":
+        elif e.key == "e":
             name, key = items[S["i"]]
             results.setdefault(name, {})[key] = {
                 "peak1": S["fits"][0], "peak2": S["fits"][1],
