@@ -62,14 +62,15 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
     plt.close("all")
     if measurementtype is not None:
         data = {measurementtype: data[measurementtype]}
-    items = only or [(n, k) for n, d in data.items() for k in d]
     if results is None:
         results = load_results() or {}
+    
+    items = only or [(n, k) for n, d in data.items() for k in d]
+    
     S = {} #state for the current measurement
     drag = [None] #line currently being dragged
-    updating = [False]
+
     fig, ax = plt.subplots(figsize=(9, 5))
-    fig.subplots_adjust(bottom=0.2)
 
     def spectrum():
         name, key = items[S["i"]]
@@ -77,13 +78,6 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
 
     def pos(pair): #position of active pair
         return sorted(l.get_xdata()[0] for l in pair)
-
-    def sync_boxes(): #active pair's x coordinates
-        lo, hi = pos(S["lines"][S["active"]])
-        updating[0] = True
-        lo_box.set_val(f"{lo:.1f}")
-        hi_box.set_val(f"{hi:.1f}")
-        updating[0] = False
 
     def refresh(msg=""):
         for idx in (0, 1):
@@ -98,7 +92,6 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
         name, key = items[S["i"]]
         ax.set_title(f"{name}/{key} [{S['i']+1}/{len(items)}]  {text}\n{msg}\n"
                      "→ blue pair, ← red pair, Enter = done", fontsize=8)
-        sync_boxes()
         fig.canvas.draw_idle()
 
     def draw_fit(idx):
@@ -156,8 +149,6 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
     #KEYBOARD INPUTS
 
     def on_key(e):
-        if lo_box.capturekeystrokes or hi_box.capturekeystrokes:
-            return
         if e.key in ("left", "right"):
             S["active"] = int(e.key == "right")
             S["blue"] = S["blue"] or S["active"] == 1
@@ -177,30 +168,10 @@ def interactive_fit_all(data, results=None, measurementtype=None, only=None):
                 fig.canvas.draw_idle()
                 show_all_fits(data, results)
 
-    #TEXT BOXES
-
-    def on_submit(_text):
-        if updating[0]:
-            return #the code changed the box, not you
-        try:
-            a, b = sorted((float(lo_box.text), float(hi_box.text)))
-        except ValueError:
-            sync_boxes() #not a number: restore the old values
-            return
-        l0, l1 = S["lines"][S["active"]]
-        l0.set_xdata([a, a])
-        l1.set_xdata([b, b])
-        refresh(draw_fit(S["active"]))
-
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
     fig.canvas.mpl_connect("button_release_event", on_release)
     cid = fig.canvas.mpl_connect("key_press_event", on_key)
-
-    lo_box = TextBox(fig.add_axes([0.2, 0.05, 0.15, 0.06]), "Low ")
-    hi_box = TextBox(fig.add_axes([0.55, 0.05, 0.15, 0.06]), "High ")
-    lo_box.on_submit(on_submit)
-    hi_box.on_submit(on_submit)
 
     load(0)
     plt.show()
